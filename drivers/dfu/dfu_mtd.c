@@ -190,7 +190,7 @@ static int dfu_flush_medium_mtd(struct dfu_entity *dfu)
 	int ret;
 
 	/* in case of ubi partition, erase rest of the partition */
-	if (dfu->data.nand.ubi) {
+	if (dfu->data.mtd.ubi) {
 		struct erase_info erase_op = {};
 
 		erase_op.mtd = dfu->data.mtd.info;
@@ -228,7 +228,7 @@ static unsigned int dfu_polltimeout_mtd(struct dfu_entity *dfu)
 	 * ubi partition, as sectors which are not used need
 	 * to be erased
 	 */
-	if (dfu->data.nand.ubi)
+	if (dfu->data.mtd.ubi)
 		return DFU_MANIFEST_POLL_TIMEOUT;
 
 	return DFU_DEFAULT_POLL_TIMEOUT;
@@ -238,7 +238,6 @@ int dfu_fill_entity_mtd(struct dfu_entity *dfu, char *devstr, char *s)
 {
 	char *st;
 	struct mtd_info *mtd;
-	bool has_pages;
 	int ret, part;
 
 	mtd = get_mtd_device_nm(devstr);
@@ -248,9 +247,7 @@ int dfu_fill_entity_mtd(struct dfu_entity *dfu, char *devstr, char *s)
 
 	dfu->dev_type = DFU_DEV_MTD;
 	dfu->data.mtd.info = mtd;
-
-	has_pages = mtd->type == MTD_NANDFLASH || mtd->type == MTD_MLCNANDFLASH;
-	dfu->max_buf_size = has_pages ? mtd->erasesize : 0;
+	dfu->max_buf_size = mtd->erasesize;
 
 	st = strsep(&s, " ");
 	if (!strcmp(st, "raw")) {
