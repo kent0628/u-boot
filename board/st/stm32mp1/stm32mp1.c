@@ -101,7 +101,9 @@ int checkboard(void)
 	const char *fdt_compat;
 	int fdt_compat_len;
 
-	if (IS_ENABLED(CONFIG_TFABOOT))
+	if (IS_ENABLED(CONFIG_STM32MP15x_STM32IMAGE))
+		mode = "trusted - stm32image";
+	else if (IS_ENABLED(CONFIG_TFABOOT))
 		mode = "trusted";
 	else
 		mode = "basic";
@@ -288,42 +290,13 @@ static void __maybe_unused led_error_blink(u32 nb_blink)
 		hang();
 }
 
-static int board_check_usb_power(void)
+static int adc_measurement(ofnode node, int adc_count, int *min_uV, int *max_uV)
 {
 	struct ofnode_phandle_args adc_args;
 	struct udevice *adc;
-	ofnode node;
 	unsigned int raw;
-	int max_uV = 0;
-	int min_uV = USB_START_HIGH_THRESHOLD_UV;
-	int ret, uV, adc_count;
-	u32 nb_blink;
-	u8 i;
-
-	if (!IS_ENABLED(CONFIG_ADC))
-		return -ENODEV;
-
-	node = ofnode_path("/config");
-	if (!ofnode_valid(node)) {
-		debug("%s: no /config node?\n", __func__);
-		return -ENOENT;
-	}
-
-	/*
-	 * Retrieve the ADC channels devices and get measurement
-	 * for each of them
-	 */
-	adc_count = ofnode_count_phandle_with_args(node, "st,adc_usb_pd",
-						   "#io-channel-cells");
-	if (adc_count < 0) {
-		if (adc_count == -ENOENT)
-			return 0;
-
-		pr_err("%s: can't find adc channel (%d)\n", __func__,
-		       adc_count);
-
-		return adc_count;
-	}
+	int ret, uV;
+	int i;
 
 	for (i = 0; i < adc_count; i++) {
 		if (ofnode_parse_phandle_with_args(node, "st,adc_usb_pd",
@@ -352,10 +325,10 @@ static int board_check_usb_power(void)
 		}
 		/* Convert to uV */
 		if (!adc_raw_to_uV(adc, raw, &uV)) {
-			if (uV > max_uV)
-				max_uV = uV;
-			if (uV < min_uV)
-				min_uV = uV;
+			if (uV > *max_uV)
+				*max_uV = uV;
+			if (uV < *min_uV)
+				*min_uV = uV;
 			pr_debug("%s: %s[%02d] = %u, %d uV\n", __func__,
 				 adc->name, adc_args.args[0], raw, uV);
 		} else {
@@ -364,18 +337,66 @@ static int board_check_usb_power(void)
 		}
 	}
 
+	return 0;
+}
+
+static int board_check_usb_power(void)
+{
+	ofnode node;
+	int max_uV = 0;
+	int min_uV = USB_START_HIGH_THRESHOLD_UV;
+	int adc_count, ret;
+	u32 nb_blink;
+	u8 i;
+
+	if (!IS_ENABLED(CONFIG_ADC))
+		return -ENODEV;
+
+	node = ofnode_path("/config");
+	if (!ofnode_valid(node)) {
+		debug("%s: no /config node?\n", __func__);
+		return -ENOENT;
+	}
+
 	/*
-	 * If highest value is inside 1.23 Volts and 2.10 Volts, that means
-	 * board is plugged on an USB-C 3A power supply and boot process can
-	 * continue.
+	 * Retrieve the ADC channels devices and get measurement
+	 * for each of them
 	 */
-	if (max_uV > USB_START_LOW_THRESHOLD_UV &&
-	    max_uV <= USB_START_HIGH_THRESHOLD_UV &&
-	    min_uV <= USB_LOW_THRESHOLD_UV)
-		return 0;
+	adc_count = ofnode_count_phandle_with_args(node, "st,adc_usb_pd",
+						   "#io-channel-cells");
+	if (adc_count < 0) {
+		if (adc_count == -ENOENT)
+			return 0;
+
+		pr_err("%s: can't find adc channel (%d)\n", __func__,
+		       adc_count);
+
+		return adc_count;
+	}
+
+	/* perform maximum of 2 ADC measurement to detect power supply current */
+	for (i = 0; i < 2; i++) {
+		ret = adc_measurement(node, adc_count, &min_uV, &max_uV);
+		if (ret)
+			return ret;
+
+		/*
+		 * If highest value is inside 1.23 Volts and 2.10 Volts, that means
+		 * board is plugged on an USB-C 3A power supply and boot process can
+		 * continue.
+		 */
+		if (max_uV > USB_START_LOW_THRESHOLD_UV &&
+		    max_uV <= USB_START_HIGH_THRESHOLD_UV &&
+		    min_uV <= USB_LOW_THRESHOLD_UV)
+			return 0;
+
+		if (i == 0) {
+			pr_debug("Previous ADC measurements was not the one expected, retry in 20ms\n");
+			mdelay(20);  /* equal to max tPDDebounce duration (min 10ms - max 20ms) */
+		}
+	}
 
 	pr_err("****************************************************\n");
-
 	/*
 	 * If highest and lowest value are either both below
 	 * USB_LOW_THRESHOLD_UV or both above USB_LOW_THRESHOLD_UV, that
@@ -583,7 +604,8 @@ error:
 static bool board_is_dk2(void)
 {
 	if (CONFIG_IS_ENABLED(TARGET_ST_STM32MP15x) &&
-	    of_machine_is_compatible("st,stm32mp157c-dk2"))
+	    (of_machine_is_compatible("st,stm32mp157c-dk2") ||
+	     of_machine_is_compatible("st,stm32mp157f-dk2")))
 		return true;
 
 	return false;
@@ -832,10 +854,17 @@ const char *env_ext4_get_dev_part(void)
 
 	return dev_part[(bootmode & TAMP_BOOT_INSTANCE_MASK) - 1];
 }
+
 int mmc_get_env_dev(void)
 {
-	u32 bootmode = get_bootmode();
+	u32 bootmode;
 
+	if (CONFIG_SYS_MMC_ENV_DEV >= 0)
+		return CONFIG_SYS_MMC_ENV_DEV;
+
+	bootmode = get_bootmode();
+
+	/* use boot instance to select the correct mmc device identifier */
 	return (bootmode & TAMP_BOOT_INSTANCE_MASK) - 1;
 }
 
@@ -848,9 +877,14 @@ int ft_board_setup(void *blob, struct bd_info *bd)
 		{ "st,stm32mp15-fmc2",		MTD_DEV_TYPE_NAND, },
 		{ "st,stm32mp1-fmc2-nfc",	MTD_DEV_TYPE_NAND, },
 	};
+	char *boot_device;
 
-	if (IS_ENABLED(CONFIG_FDT_FIXUP_PARTITIONS))
-		fdt_fixup_mtdparts(blob, nodes, ARRAY_SIZE(nodes));
+	/* Check the boot-source and don't update MTD for serial or usb boot */
+	boot_device = env_get("boot_device");
+	if (!boot_device ||
+	    (strcmp(boot_device, "serial") && strcmp(boot_device, "usb")))
+		if (IS_ENABLED(CONFIG_FDT_FIXUP_PARTITIONS))
+			fdt_fixup_mtdparts(blob, nodes, ARRAY_SIZE(nodes));
 
 	return 0;
 }
