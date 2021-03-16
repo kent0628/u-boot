@@ -219,18 +219,21 @@ static void early_enable_caches(void)
 	if (CONFIG_IS_ENABLED(SYS_DCACHE_OFF))
 		return;
 
+#if !(CONFIG_IS_ENABLED(SYS_ICACHE_OFF) && CONFIG_IS_ENABLED(SYS_DCACHE_OFF))
 	gd->arch.tlb_size = PGTABLE_SIZE;
 	gd->arch.tlb_addr = (unsigned long)&early_tlb;
+#endif
 
 	dcache_enable();
 
 	if (IS_ENABLED(CONFIG_SPL_BUILD))
 		mmu_set_region_dcache_behaviour(
-			ALIGN(STM32_SYSRAM_BASE, MMU_SECTION_SIZE),
-			round_up(STM32_SYSRAM_SIZE, MMU_SECTION_SIZE),
+			ALIGN_DOWN(STM32_SYSRAM_BASE, MMU_SECTION_SIZE),
+			ALIGN(STM32_SYSRAM_SIZE, MMU_SECTION_SIZE),
 			DCACHE_DEFAULT_OPTION);
 	else
-		mmu_set_region_dcache_behaviour(STM32_DDR_BASE, STM32_DDR_SIZE,
+		mmu_set_region_dcache_behaviour(STM32_DDR_BASE,
+						CONFIG_DDR_CACHEABLE_SIZE,
 						DCACHE_DEFAULT_OPTION);
 }
 
@@ -260,7 +263,8 @@ int arch_cpu_init(void)
 
 	boot_mode = get_bootmode();
 
-	if ((boot_mode & TAMP_BOOT_DEVICE_MASK) == BOOT_SERIAL_UART)
+	if (IS_ENABLED(CONFIG_CMD_STM32PROG_SERIAL) &&
+	    (boot_mode & TAMP_BOOT_DEVICE_MASK) == BOOT_SERIAL_UART)
 		gd->flags |= GD_FLG_SILENT | GD_FLG_DISABLE_CONSOLE;
 #if defined(CONFIG_DEBUG_UART) && \
 	!defined(CONFIG_TFABOOT) && \
@@ -460,7 +464,6 @@ static void setup_boot_mode(void)
 	unsigned int instance = (boot_mode & TAMP_BOOT_INSTANCE_MASK) - 1;
 	u32 forced_mode = (boot_ctx & TAMP_BOOT_FORCED_MASK);
 	struct udevice *dev;
-	int alias;
 
 	pr_debug("%s: boot_ctx=0x%x => boot_mode=%x, instance=%d forced=%x\n",
 		 __func__, boot_ctx, boot_mode, instance, forced_mode);
@@ -470,17 +473,22 @@ static void setup_boot_mode(void)
 			break;
 		/* serial : search associated alias in devicetree */
 		sprintf(cmd, "serial@%x", serial_addr[instance]);
-		if (uclass_get_device_by_name(UCLASS_SERIAL, cmd, &dev))
+		if (uclass_get_device_by_name(UCLASS_SERIAL, cmd, &dev)) {
+			/* restore console on error */
+			if (IS_ENABLED(CONFIG_CMD_STM32PROG_SERIAL))
+				gd->flags &= ~(GD_FLG_SILENT |
+					       GD_FLG_DISABLE_CONSOLE);
+			printf("uart%d = %s not found in device tree!\n",
+			       instance, cmd);
 			break;
-		if (fdtdec_get_alias_seq(gd->fdt_blob, "serial",
-					 dev_of_offset(dev), &alias))
-			break;
-		sprintf(cmd, "%d", alias);
+		}
+		sprintf(cmd, "%d", dev->seq);
 		env_set("boot_device", "serial");
 		env_set("boot_instance", cmd);
 
 		/* restore console on uart when not used */
-		if (gd->cur_serial_dev != dev) {
+		if (IS_ENABLED(CONFIG_CMD_STM32PROG_SERIAL) &&
+		    (gd->cur_serial_dev != dev)) {
 			gd->flags &= ~(GD_FLG_SILENT |
 				       GD_FLG_DISABLE_CONSOLE);
 			printf("serial boot with console enabled!\n");

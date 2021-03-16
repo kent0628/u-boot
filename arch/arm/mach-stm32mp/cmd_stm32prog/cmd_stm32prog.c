@@ -50,9 +50,9 @@ static int do_stm32prog(struct cmd_tbl *cmdtp, int flag, int argc,
 	if (argc < 3 ||  argc > 5)
 		return CMD_RET_USAGE;
 
-	if (!strcmp(argv[1], "usb"))
+	if (IS_ENABLED(CONFIG_CMD_STM32PROG_USB) && !strcmp(argv[1], "usb"))
 		link = LINK_USB;
-	else if (!strcmp(argv[1], "serial"))
+	else if (IS_ENABLED(CONFIG_CMD_STM32PROG_SERIAL) && !strcmp(argv[1], "serial"))
 		link = LINK_SERIAL;
 
 	if (link == LINK_UNDEFINED) {
@@ -73,15 +73,16 @@ static int do_stm32prog(struct cmd_tbl *cmdtp, int flag, int argc,
 		size = simple_strtoul(argv[4], NULL, 16);
 
 	/* check STM32IMAGE presence */
-	if (size == 0 &&
-	    !stm32prog_header_check((struct raw_header_s *)addr, &header)) {
-		size = header.image_length + BL_HEADER_SIZE;
+	if (size == 0) {
+		stm32prog_header_check((struct raw_header_s *)addr, &header);
+		if (header.type == HEADER_STM32IMAGE) {
+			size = header.image_length + BL_HEADER_SIZE;
 
-		/* uImage detected in STM32IMAGE, execute the script */
-		if (IMAGE_FORMAT_LEGACY ==
-		    genimg_get_format((void *)(addr + BL_HEADER_SIZE)))
-			return image_source_script(addr + BL_HEADER_SIZE,
-						   "script@1");
+			/* uImage detected in STM32IMAGE, execute the script */
+			if (IMAGE_FORMAT_LEGACY ==
+			    genimg_get_format((void *)(addr + BL_HEADER_SIZE)))
+				return image_source_script(addr + BL_HEADER_SIZE, "script@1");
+		}
 	}
 
 	if (IS_ENABLED(CONFIG_DM_VIDEO))
@@ -174,6 +175,7 @@ U_BOOT_CMD(stm32prog, 5, 0, do_stm32prog,
 	   "<size> = size of flashlayout\n"
 );
 
+#ifdef CONFIG_STM32MP15x_STM32IMAGE
 bool stm32prog_get_tee_partitions(void)
 {
 	if (stm32prog_data)
@@ -181,6 +183,7 @@ bool stm32prog_get_tee_partitions(void)
 
 	return false;
 }
+#endif
 
 bool stm32prog_get_fsbl_nor(void)
 {

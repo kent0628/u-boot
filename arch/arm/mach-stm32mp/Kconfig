@@ -56,6 +56,13 @@ config STM32MP15x
 		dual core A7 for STM32MP157/3, monocore for STM32MP151
 		target all the STMicroelectronics board with SOC STM32MP1 family
 
+config STM32MP15x_STM32IMAGE
+	bool "Support STM32 image for generated U-Boot image"
+	depends on STM32MP15x && TFABOOT
+	help
+		Support of STM32 image generation for SOC STM32MP15x
+		for TF-A boot when FIP container is not used
+
 choice
 	prompt "STM32MP15x board select"
 	optional
@@ -93,6 +100,19 @@ config SYS_TEXT_BASE
 config NR_DRAM_BANKS
 	default 1
 
+config DDR_CACHEABLE_SIZE
+	hex "Size of the DDR marked cacheable in pre-reloc stage"
+	default 0x10000000 if TFABOOT
+	default 0x40000000
+	help
+		Define the size of the DDR marked as cacheable in U-Boot
+		pre-reloc stage.
+		This option can be useful to avoid speculatif access
+		to secured area of DDR used by TF-A or OP-TEE before U-Boot
+		initialization.
+		The areas marked "no-map" in device tree should be located
+		before this limit: STM32_DDR_BASE + DDR_CACHEABLE_SIZE.
+
 config SYS_MMCSD_RAW_MODE_U_BOOT_PARTITION_MMC2
 	hex "Partition on MMC2 to use to load U-Boot from"
 	depends on SYS_MMCSD_RAW_MODE_U_BOOT_USE_PARTITION
@@ -107,23 +127,6 @@ config STM32_ETZPC
 	default y
 	help
 	  Say y to enable STM32 Extended TrustZone Protection
-
-config CMD_STM32PROG
-	bool "command stm32prog for STM32CudeProgrammer"
-	select DFU
-	select DFU_RAM
-	select DFU_VIRT
-	select PARTITION_TYPE_GUID
-	imply CMD_GPT if MMC
-	imply CMD_MTD if MTD
-	imply DFU_MMC if MMC
-	imply DFU_MTD if MTD
-	help
-		activate a specific command stm32prog for STM32MP soc family
-		witch update the device with the tools STM32CubeProgrammer,
-		using UART with STM32 protocol or USB with DFU protocol
-		NB: access to not volatile memory (NOR/NAND/SD/eMMC) is based
-		    on U-Boot DFU framework
 
 config CMD_STM32KEY
 	bool "command stm32key to fuse public key hash"
@@ -164,6 +167,7 @@ config DEBUG_UART_CLOCK
 	default 64000000
 endif
 
+source "arch/arm/mach-stm32mp/cmd_stm32prog/Kconfig"
 source "board/st/stm32mp1/Kconfig"
 source "board/dhelectronics/dh_stm32mp1/Kconfig"
 
